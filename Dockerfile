@@ -4,26 +4,19 @@ EXPOSE 8080
 VOLUME /etc/searx
 VOLUME /var/log/uwsgi
 
-ARG GIT_URL=unknown
-ARG VERSION_GITCOMMIT=unknown
-ARG SEARX_GIT_VERSION=unknown
-
 ARG SEARX_GID=977
 ARG SEARX_UID=977
 
 RUN addgroup -g ${SEARX_GID} searx && \
     adduser -u ${SEARX_UID} -D -h /usr/local/searx -s /bin/sh -G searx searx
 
-ARG TIMESTAMP_SETTINGS=0
-ARG TIMESTAMP_UWSGI=0
-ARG LABEL_VCS_REF=
-ARG LABEL_VCS_URL=
-
 ENV INSTANCE_NAME=searx \
     AUTOCOMPLETE= \
     BASE_URL= \
     MORTY_KEY= \
-    MORTY_URL=
+    MORTY_URL= \
+    SEARX_SETTINGS_PATH=/etc/searx/settings.yml \
+    UWSGI_SETTINGS_PATH=/etc/searx/uwsgi.ini
 
 WORKDIR /usr/local/searx
 
@@ -41,8 +34,6 @@ RUN apk upgrade --no-cache \
     openssl-dev \
     tar \
     git \
-    protoc \
-    protobuf-dev \
  && apk add --no-cache \
     ca-certificates \
     su-exec \
@@ -55,13 +46,16 @@ RUN apk upgrade --no-cache \
     uwsgi \
     uwsgi-python3 \
     brotli \
-    protobuf \
  && pip3 install --upgrade pip \
  && pip3 install --no-cache -r requirements.txt \
  && apk del build-dependencies \
  && rm -rf /root/.cache
 
 COPY --chown=searx:searx . .
+
+ARG TIMESTAMP_SETTINGS=0
+ARG TIMESTAMP_UWSGI=0
+ARG VERSION_GITCOMMIT=unknown
 
 RUN su searx -c "/usr/bin/python3 -m compileall -q searx"; \
     touch -c --date=@${TIMESTAMP_SETTINGS} searx/settings.yml; \
@@ -73,8 +67,12 @@ RUN su searx -c "/usr/bin/python3 -m compileall -q searx"; \
     -o -name '*.svg' -o -name '*.ttf' -o -name '*.eot' \) \
     -type f -exec gzip -9 -k {} \+ -exec brotli --best {} \+
 
-# Keep this argument at the end since it change each time
+# Keep these arguments at the end to prevent redundant layer rebuilds
 ARG LABEL_DATE=
+ARG GIT_URL=unknown
+ARG SEARX_GIT_VERSION=unknown
+ARG LABEL_VCS_REF=
+ARG LABEL_VCS_URL=
 LABEL maintainer="searx <${GIT_URL}>" \
       description="A privacy-respecting, hackable metasearch engine." \
       version="${SEARX_GIT_VERSION}" \

@@ -11,9 +11,9 @@ from urllib.parse import urlparse
 import re
 from langdetect import detect_langs
 from langdetect.lang_detect_exception import LangDetectException
-import requests.exceptions
+import httpx
 
-from searx import poolrequests, logger
+from searx import network, logger
 from searx.results import ResultContainer
 from searx.search.models import SearchQuery, EngineRef
 from searx.search.processors import EngineProcessor
@@ -75,8 +75,8 @@ def _is_url_image(image_url):
     while retry > 0:
         a = time()
         try:
-            poolrequests.set_timeout_for_thread(10.0, time())
-            r = poolrequests.get(image_url, timeout=10.0, allow_redirects=True, headers={
+            network.set_timeout_for_thread(10.0, time())
+            r = network.get(image_url, timeout=10.0, allow_redirects=True, headers={
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:84.0) Gecko/20100101 Firefox/84.0',
                 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
                 'Accept-Language': 'en-US;q=0.5,en;q=0.3',
@@ -90,10 +90,10 @@ def _is_url_image(image_url):
             if r.headers["content-type"].startswith('image/'):
                 return True
             return False
-        except requests.exceptions.Timeout:
+        except httpx.TimeoutException:
             logger.error('Timeout for %s: %i', image_url, int(time() - a))
             retry -= 1
-        except requests.exceptions.RequestException:
+        except httpx.HTTPError:
             logger.exception('Exception for %s', image_url)
             return False
 
@@ -174,7 +174,7 @@ class ResultContainerTests:
     @property
     def result_urls(self):
         results = self.result_container.get_ordered_results()
-        return [result['url'] for result in results]
+        return [result['url'] for result in results if 'url' in result]
 
     def _record_error(self, message: str, *args) -> None:
         sq = _search_query_to_dict(self.search_query)
@@ -197,6 +197,8 @@ class ResultContainerTests:
             self._record_error('HTML in title', repr(result.get('title', '')))
         if not _check_no_html(result.get('content', '')):
             self._record_error('HTML in content', repr(result.get('content', '')))
+        if result.get('url') is None:
+            self._record_error('url is None')
 
         self._add_language(result.get('title', ''))
         self._add_language(result.get('content', ''))
@@ -310,7 +312,7 @@ class CheckerTests:
         self.result_container_tests_list = result_container_tests_list
 
     def unique_results(self):
-        """Check the results of each ResultContain is unique"""
+        """Check the results of each ResultContainer is unique"""
         urls_list = [rct.result_urls for rct in self.result_container_tests_list]
         if len(urls_list[0]) > 0:
             # results on the first page

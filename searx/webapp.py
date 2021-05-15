@@ -26,12 +26,26 @@ if __name__ == '__main__':
     from os.path import realpath, dirname
     sys.path.append(realpath(dirname(realpath(__file__)) + '/../'))
 
+# set Unix thread name
+try:
+    import setproctitle
+except ImportError:
+    pass
+else:
+    import threading
+    old_thread_init = threading.Thread.__init__
+
+    def new_thread_init(self, *args, **kwargs):
+        old_thread_init(self, *args, **kwargs)
+        setproctitle.setthreadtitle(self._name)
+    threading.Thread.__init__ = new_thread_init
+
 import hashlib
 import hmac
 import json
 import os
 
-import requests
+import httpx
 
 from searx import logger
 logger = logger.getChild('webapp')
@@ -40,7 +54,8 @@ from datetime import datetime, timedelta
 from time import time
 from html import escape
 from io import StringIO
-from urllib.parse import urlencode, urljoin, urlparse
+import urllib
+from urllib.parse import urlencode, urlparse
 
 from pygments import highlight
 from pygments.lexers import get_lexer_by_name
@@ -79,7 +94,7 @@ from searx.plugins import plugins
 from searx.plugins.oa_doi_rewrite import get_doi_resolver
 from searx.preferences import Preferences, ValidationException, LANGUAGE_CODES
 from searx.answerers import answerers
-from searx.poolrequests import get_global_proxies
+from searx.network import stream as http_stream
 from searx.answerers import ask
 from searx.metrology.error_recorder import errors_per_engines
 
@@ -209,7 +224,10 @@ def get_locale():
         request.form['use-translation'] = 'oc'
         locale = 'fr_FR'
 
-    logger.debug("%s uses locale `%s` from %s", request.url, locale, locale_source)
+    logger.debug(
+        "%s uses locale `%s` from %s", urllib.parse.quote(request.url), locale, locale_source
+    )
+
     return locale
 
 
@@ -270,14 +288,7 @@ def extract_domain(url):
 
 
 def get_base_url():
-    if settings['server']['base_url']:
-        hostname = settings['server']['base_url']
-    else:
-        scheme = 'http'
-        if request.is_secure:
-            scheme = 'https'
-        hostname = url_for('index', _external=True, _scheme=scheme)
-    return hostname
+    return url_for('index', _external=True)
 
 
 def get_current_theme_name(override=None):
@@ -310,10 +321,6 @@ def url_for_theme(endpoint, override_theme=None, **values):
         if filename_with_theme in static_files:
             values['filename'] = filename_with_theme
     url = url_for(endpoint, **values)
-    if settings['server']['base_url']:
-        if url.startswith('/'):
-            url = url[1:]
-        url = urljoin(settings['server']['base_url'], url)
     return url
 
 
@@ -360,6 +367,15 @@ def image_proxify(url):
 
     return '{0}?{1}'.format(url_for('image_proxy'),
                             urlencode(dict(url=url.encode(), h=h)))
+
+
+def get_translations():
+    return {
+        # when overpass AJAX request fails (on a map result)
+        'could_not_load': gettext('could not load data'),
+        # when there is autocompletion
+        'no_item_found': gettext('No item found')
+    }
 
 
 def render(template_name, override_theme=None, **kwargs):
@@ -420,6 +436,8 @@ def render(template_name, override_theme=None, **kwargs):
     kwargs['preferences'] = request.preferences
 
     kwargs['brand'] = brand
+
+    kwargs['translations'] = json.dumps(get_translations(), separators=(',', ':'))
 
     kwargs['scripts'] = set()
     kwargs['endpoint'] = 'results' if 'q' in kwargs else request.endpoint
@@ -639,7 +657,7 @@ def search():
             result['pretty_url'] = prettify_url(result['url'])
 
         # TODO, check if timezone is calculated right
-        if 'publishedDate' in result:
+        if result.get('publishedDate'):  # do not try to get a date from an empty string or a None type
             try:  # test if publishedDate >= 1900 (datetime module bug)
                 result['pubdate'] = result['publishedDate'].strftime('%Y-%m-%d %H:%M:%S%z')
             except ValueError:
@@ -774,20 +792,26 @@ def autocompleter():
 
     # parse query
     raw_text_query = RawTextQuery(request.form.get('q', ''), disabled_engines)
+    sug_prefix = raw_text_query.getQuery()
 
     # normal autocompletion results only appear if no inner results returned
     # and there is a query part
-    if len(raw_text_query.autocomplete_list) == 0 and len(raw_text_query.getQuery()) > 0:
+    if len(raw_text_query.autocomplete_list) == 0 and len(sug_prefix) > 0:
+
         # get language from cookie
         language = request.preferences.get_value('language')
         if not language or language == 'all':
             language = 'en'
         else:
             language = language.split('-')[0]
+
         # run autocompletion
-        raw_results = search_autocomplete(request.preferences.get_value('autocomplete'),
-                                          raw_text_query.getQuery(), language)
+        raw_results = search_autocomplete(
+            request.preferences.get_value('autocomplete'), sug_prefix, language
+        )
         for result in raw_results:
+            # attention: this loop will change raw_text_query object and this is
+            # the reason why the sug_prefix was stored before (see above)
             results.append(raw_text_query.changeQuery(result).getFullQuery())
 
     if len(raw_text_query.autocomplete_list) > 0:
@@ -798,13 +822,16 @@ def autocompleter():
         for answer in answers:
             results.append(str(answer['answer']))
 
-    # return autocompleter results
     if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
-        return Response(json.dumps(results),
-                        mimetype='application/json')
+        # the suggestion request comes from the searx search form
+        suggestions = json.dumps(results)
+        mimetype = 'application/json'
+    else:
+        # the suggestion request comes from browser's URL bar
+        suggestions = json.dumps([sug_prefix, results])
+        mimetype = 'application/x-suggestions+json'
 
-    return Response(json.dumps([raw_text_query.query, results]),
-                    mimetype='application/x-suggestions+json')
+    return Response(suggestions, mimetype=mimetype)
 
 
 @app.route('/preferences', methods=['GET', 'POST'])
@@ -813,7 +840,7 @@ def preferences():
 
     # save preferences
     if request.method == 'POST':
-        resp = make_response(redirect(urljoin(settings['server']['base_url'], url_for('index'))))
+        resp = make_response(redirect(url_for('index', _external=True)))
         try:
             request.preferences.parse_form(request.form)
         except ValidationException:
@@ -842,7 +869,6 @@ def preferences():
             if e.timeout > settings['outgoing']['request_timeout']:
                 stats[e.name]['warn_timeout'] = True
             stats[e.name]['supports_selected_language'] = _is_selected_language_supported(e, request.preferences)
-
             engines_by_category[c].append(e)
 
     # get first element [0], the engine time,
@@ -891,55 +917,69 @@ def _is_selected_language_supported(engine, preferences):
 
 @app.route('/image_proxy', methods=['GET'])
 def image_proxy():
-    url = request.args.get('url').encode()
+    url = request.args.get('url')
 
     if not url:
         return '', 400
 
-    h = new_hmac(settings['server']['secret_key'], url)
+    h = new_hmac(settings['server']['secret_key'], url.encode())
 
     if h != request.args.get('h'):
         return '', 400
 
-    headers = dict_subset(request.headers, {'If-Modified-Since', 'If-None-Match'})
-    headers['User-Agent'] = gen_useragent()
+    maximum_size = 5 * 1024 * 1024
 
-    resp = requests.get(url,
-                        stream=True,
-                        timeout=settings['outgoing']['request_timeout'],
-                        headers=headers,
-                        proxies=get_global_proxies())
+    try:
+        headers = dict_subset(request.headers, {'If-Modified-Since', 'If-None-Match'})
+        headers['User-Agent'] = gen_useragent()
+        stream = http_stream(
+            method='GET',
+            url=url,
+            headers=headers,
+            timeout=settings['outgoing']['request_timeout'],
+            allow_redirects=True,
+            max_redirects=20)
 
-    if resp.status_code == 304:
-        return '', resp.status_code
+        resp = next(stream)
+        content_length = resp.headers.get('Content-Length')
+        if content_length and content_length.isdigit() and int(content_length) > maximum_size:
+            return 'Max size', 400
 
-    if resp.status_code != 200:
-        logger.debug('image-proxy: wrong response code: {0}'.format(resp.status_code))
-        if resp.status_code >= 400:
+        if resp.status_code == 304:
             return '', resp.status_code
+
+        if resp.status_code != 200:
+            logger.debug('image-proxy: wrong response code: {0}'.format(resp.status_code))
+            if resp.status_code >= 400:
+                return '', resp.status_code
+            return '', 400
+
+        if not resp.headers.get('content-type', '').startswith('image/'):
+            logger.debug('image-proxy: wrong content-type: {0}'.format(resp.headers.get('content-type')))
+            return '', 400
+
+        headers = dict_subset(resp.headers, {'Content-Length', 'Length', 'Date', 'Last-Modified', 'Expires', 'Etag'})
+
+        total_length = 0
+
+        def forward_chunk():
+            nonlocal total_length
+            for chunk in stream:
+                total_length += len(chunk)
+                if total_length > maximum_size:
+                    break
+                yield chunk
+
+        return Response(forward_chunk(), mimetype=resp.headers['Content-Type'], headers=headers)
+    except httpx.HTTPError:
         return '', 400
-
-    if not resp.headers.get('content-type', '').startswith('image/'):
-        logger.debug('image-proxy: wrong content-type: {0}'.format(resp.headers.get('content-type')))
-        return '', 400
-
-    img = b''
-    chunk_counter = 0
-
-    for chunk in resp.iter_content(1024 * 1024):
-        chunk_counter += 1
-        if chunk_counter > 5:
-            return '', 502  # Bad gateway - file is too big (>5M)
-        img += chunk
-
-    headers = dict_subset(resp.headers, {'Content-Length', 'Length', 'Date', 'Last-Modified', 'Expires', 'Etag'})
-
-    return Response(img, mimetype=resp.headers['content-type'], headers=headers)
 
 
 @app.route('/stats', methods=['GET'])
 def stats():
     """Render engine statistics page."""
+    if not settings['general'].get('enable_stats'):
+        return page_not_found(None)
     stats = get_engines_stats(request.preferences)
     return render(
         'stats.html',
@@ -1003,11 +1043,11 @@ def opensearch():
     if request.headers.get('User-Agent', '').lower().find('webkit') >= 0:
         method = 'get'
 
-    ret = render('opensearch.xml',
-                 opensearch_method=method,
-                 host=get_base_url(),
-                 urljoin=urljoin,
-                 override_theme='__common__')
+    ret = render(
+        'opensearch.xml',
+        opensearch_method=method,
+        override_theme='__common__'
+    )
 
     resp = Response(response=ret,
                     status=200,
@@ -1028,7 +1068,7 @@ def favicon():
 
 @app.route('/clear_cookies')
 def clear_cookies():
-    resp = make_response(redirect(urljoin(settings['server']['base_url'], url_for('index'))))
+    resp = make_response(redirect(url_for('index', _external=True)))
     for cookie_name in request.cookies:
         resp.delete_cookie(cookie_name)
     return resp
@@ -1084,14 +1124,6 @@ def config():
     })
 
 
-@app.route('/translations.js')
-def js_translations():
-    return render(
-        'translations.js.tpl',
-        override_theme='__common__',
-    ), {'Content-Type': 'text/javascript; charset=UTF-8'}
-
-
 @app.errorhandler(404)
 def page_not_found(e):
     return render('404.html'), 404
@@ -1129,19 +1161,41 @@ class ReverseProxyPathFix:
     '''
 
     def __init__(self, app):
+
         self.app = app
+        self.script_name = None
+        self.scheme = None
+        self.server = None
+
+        if settings['server']['base_url']:
+
+            # If base_url is specified, then these values from are given
+            # preference over any Flask's generics.
+
+            base_url = urlparse(settings['server']['base_url'])
+            self.script_name = base_url.path
+            if self.script_name.endswith('/'):
+                # remove trailing slash to avoid infinite redirect on the index
+                # see https://github.com/searx/searx/issues/2729
+                self.script_name = self.script_name[:-1]
+            self.scheme = base_url.scheme
+            self.server = base_url.netloc
 
     def __call__(self, environ, start_response):
-        script_name = environ.get('HTTP_X_SCRIPT_NAME', '')
+        script_name = self.script_name or environ.get('HTTP_X_SCRIPT_NAME', '')
         if script_name:
             environ['SCRIPT_NAME'] = script_name
             path_info = environ['PATH_INFO']
             if path_info.startswith(script_name):
                 environ['PATH_INFO'] = path_info[len(script_name):]
 
-        scheme = environ.get('HTTP_X_SCHEME', '')
+        scheme = self.scheme or environ.get('HTTP_X_SCHEME', '')
         if scheme:
             environ['wsgi.url_scheme'] = scheme
+
+        server = self.server or environ.get('HTTP_X_FORWARDED_HOST', '')
+        if server:
+            environ['HTTP_HOST'] = server
         return self.app(environ, start_response)
 
 

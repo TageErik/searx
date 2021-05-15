@@ -1,3 +1,4 @@
+/*jshint esversion: 6 */
 module.exports = function(grunt) {
 
   grunt.initConfig({
@@ -59,7 +60,7 @@ module.exports = function(grunt) {
         separator: ';'
       },
       dist: {
-        src: ['src/js/*.js'],
+        src: ['src/js/*.js', '../__common__/js/image_layout.js'],
         dest: 'js/searx.js'
       }
     },
@@ -75,7 +76,7 @@ module.exports = function(grunt) {
       }
     },
     jshint: {
-      files: ['gruntfile.js', 'js/searx_src/*.js'],
+      files: ['gruntfile.js', 'js/searx_src/*.js', '../__common__/js/image_layout.js'],
       options: {
         reporterOutput: "",
         // options here to override JSHint defaults
@@ -101,14 +102,17 @@ module.exports = function(grunt) {
       },
       production: {
         options: {
-          paths: ["src/less/pointhi", "src/less/logicodev", "src/less/logicodev-dark", "less/bootstrap"],
+          paths: ["src/less/pointhi", "src/less/logicodev", "src/less/logicodev-dark", "src/less/bootstrap"],
           plugins: [
             new (require('less-plugin-clean-css'))()
           ],
           sourceMap: true,
+          sourceMapURL: (name) => { const s = name.split('/'); return s[s.length - 1] + '.map';},
+          outputSourceFiles: false,
+          sourceMapRootpath: '../'
         },
         files: {
-          "css/bootstrap.min.css": "src/less/bootstrap/bootstrap.less",
+          "css/bootstrap.min.css": "css/bootstrap.css",
           "css/leaflet.min.css": "css/leaflet.css",
           "css/pointhi.min.css": "src/less/pointhi/oscar.less",
           "css/logicodev.min.css": "src/less/logicodev/oscar.less",

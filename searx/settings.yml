@@ -2,6 +2,7 @@ general:
     debug : False # Debug mode, only for development
     instance_name : "ShadowSearch" # displayed name
     contact_url: False # mailto:contact@example.com
+    enable_stats: False # activate /stats page - note: it may leak usage data
 
 brand:
     git_url: https://github.com/searx/searx
@@ -67,19 +68,17 @@ ui:
 #    key : !!binary "your_morty_proxy_key"
 
 outgoing: # communication with search engines
-    request_timeout : 2.0 # default timeout in seconds, can be override by engine
+    request_timeout : 3.0 # default timeout in seconds, can be override by engine
     # max_request_timeout: 10.0 # the maximum timeout in seconds
     useragent_suffix : "" # suffix of searx_useragent, could contain informations like an email address to the administrator
-    pool_connections : 100 # Number of different hosts
-    pool_maxsize : 10 # Number of simultaneous requests by host
+    pool_connections : 100 # The maximum number of concurrent connections that may be established.
+    pool_maxsize : 20 # Allow the connection pool to maintain keep-alive connections below this point.
+    enable_http2: True  # See https://www.python-httpx.org/http2/
 # uncomment below section if you want to use a proxy
 # see https://2.python-requests.org/en/latest/user/advanced/#proxies
 # SOCKS proxies are also supported: see https://2.python-requests.org/en/latest/user/advanced/#socks
 #    proxies:
-#        http:
-#            - http://proxy1:8080
-#            - http://proxy2:8080
-#        https:
+#        all://:
 #            - http://proxy1:8080
 #            - http://proxy2:8080
 #    using_tor_proxy : True
@@ -89,6 +88,7 @@ outgoing: # communication with search engines
 #    source_ips:
 #        - 1.1.1.1
 #        - 1.1.1.2
+#        - fe80::/126
 
 # External plugin configuration
 # See http://searx.github.io/searx/dev/plugins.html for more details
@@ -103,6 +103,18 @@ outgoing: # communication with search engines
 # enabled_plugins:
 #   - "HTTPS rewrite"
 #   - ...
+
+# Example to rewrite hostnames in external links
+#
+# enabled_plugins:
+#   - 'Hostname replace'
+# hostname_replace:
+#   '(.*\.)?youtube\.com$':           'invidious.example.com'
+#   '(.*\.)?youtu\.be$':              'invidious.example.com'
+#   '(.*\.)?youtube-noocookie\.com$': 'yotter.example.com'
+#   '(.*\.)?reddit\.com$':            'teddit.example.com'
+#   '(.*\.)?redd\.it$':               'teddit.example.com'
+#   '(www\.)?twitter\.com$':          'nitter.example.com'
 
 checker:
     # disable checker when in debug mode
@@ -197,6 +209,11 @@ engines:
 #    engine : base
 #    shortcut : bs
 
+  - name: bandcamp
+    engine: bandcamp
+    shortcut: bc
+    categories: music
+
   - name : wikipedia
     engine : wikipedia
     shortcut : wp
@@ -263,6 +280,13 @@ engines:
     engine : ccengine
     categories : images
     shortcut : cce
+
+# - name : core.ac.uk
+#   engine : core
+#   categories : science
+#   shortcut : cor
+#   # get your API key from: https://core.ac.uk/api-keys/register/
+#   api_key : 'unset'
 
   - name : crossref
     engine : json_engine
@@ -544,9 +568,9 @@ engines:
   - name : google play apps
     engine : xpath
     search_url : https://play.google.com/store/search?q={query}&c=apps
-    results_xpath : '//div[@class="WHE7ib mpg5gc"]'
-    title_xpath : './/div[@class="RZEgze"]//div[@title and not(@title="")]/a'
-    url_xpath : './/div[@class="RZEgze"]//div[@title and not(@title="")]/a/@href'
+    results_xpath : '//div[@class="ImZGtf mpg5gc"]'
+    title_xpath : './/div[@class="RZEgze"]//div[@class="kCSSQe"]//a'
+    url_xpath : './/div[@class="RZEgze"]//div[@class="kCSSQe"]//a/@href'
     content_xpath : './/div[@class="RZEgze"]//a[@class="mnKHRc"]'
     thumbnail_xpath : './/div[@class="uzcko"]/div/span[1]//img/@data-src'
     categories : files
@@ -563,10 +587,10 @@ engines:
   - name : google play movies
     engine : xpath
     search_url : https://play.google.com/store/search?q={query}&c=movies
-    results_xpath : '//div[@class="WHE7ib mpg5gc"]'
-    title_xpath : './/div[@class="RZEgze"]//div[@title and not(@title="")]/a'
-    url_xpath : './/div[@class="RZEgze"]//div[@title and not(@title="")]/a/@href'
-    content_xpath : './/div[@class="RZEgze"]//a[@class="mnKHRc"]'
+    results_xpath : '//div[@class="ImZGtf mpg5gc"]'
+    title_xpath : './/div[@class="RZEgze"]//div[@class="kCSSQe"]//a'
+    url_xpath : './/div[@class="RZEgze"]//div[@class="kCSSQe"]//a/@href'
+    content_xpath : './/div[@class="kCSSQe"]'
     thumbnail_xpath : './/div[@class="uzcko"]/div/span[1]//img/@data-src'
     categories : videos
     shortcut : gpm
@@ -582,7 +606,7 @@ engines:
   - name : geektimes
     engine : xpath
     paging : True
-    search_url : https://geektimes.ru/search/page{pageno}/?q={query}
+    search_url : https://habr.com/en/search/page{pageno}/?q={query}
     url_xpath : //article[contains(@class, "post")]//a[@class="post__title_link"]/@href
     title_xpath : //article[contains(@class, "post")]//a[@class="post__title_link"]
     content_xpath : //article[contains(@class, "post")]//div[contains(@class, "post__text")]
@@ -618,13 +642,13 @@ engines:
       results: HTML
 
   - name : hoogle
-    engine : json_engine
+    engine : xpath
     paging : True
-    search_url : https://www.haskell.org/hoogle/?mode=json&hoogle={query}&start={pageno}
-    results_query : results
-    url_query : location
-    title_query : self
-    content_query : docs
+    search_url : https://hoogle.haskell.org/?hoogle={query}&start={pageno}
+    results_xpath : '//div[@class="result"]'
+    title_xpath : './/div[@class="ans"]//a'
+    url_xpath : './/div[@class="ans"]//a/@href'
+    content_xpath : './/div[@class="from"]'
     page_size : 20
     categories : it
     shortcut : ho
@@ -690,7 +714,7 @@ engines:
     content_xpath : .//a[@class="domain"]
     categories : it
     shortcut : lo
-    timeout : 3.0
+    timeout : 5.0
     disabled: True
     about:
       website: https://lobste.rs/
@@ -699,6 +723,13 @@ engines:
       use_official_api: false
       require_api_key: false
       results: HTML
+
+#  - name : meilisearch
+#    engine : meilisearch
+#    shortcut: mes
+#    enable_http: True
+#    base_url : http://localhost:7700
+#    index : my-index
 
   - name : microsoft academic
     engine : microsoft_academic
@@ -828,6 +859,16 @@ engines:
     url: https://thepiratebay.org/
     timeout : 3.0
 
+# Required dependency: psychopg2
+#  - name : postgresql
+#    engine : postgresql
+#    database : postgres
+#    username : postgres
+#    password : postgres
+#    limit : 10
+#    query_str : 'SELECT * from my_table WHERE my_column = %(query)s'
+#    shortcut : psql
+
   - name : pubmed
     engine : pubmed
     shortcut : pub
@@ -846,11 +887,13 @@ engines:
     engine : qwant
     shortcut : qwi
     categories : images
+    network: qwant
 
   - name : qwant news
     engine : qwant
     shortcut : qwn
     categories : news
+    network: qwant
 
 #  - name: library
 #    engine: recoll
@@ -918,13 +961,8 @@ engines:
 #    disabled : True
 
   - name : semantic scholar
-    engine : xpath
-    paging : True
-    search_url : https://www.semanticscholar.org/search?q={query}&sort=relevance&page={pageno}&ae=false
-    results_xpath : //article
-    url_xpath : .//div[@class="search-result-title"]/a/@href
-    title_xpath : .//div[@class="search-result-title"]/a
-    content_xpath : .//div[@class="search-result-abstract"]
+    engine : semantic_scholar
+    disabled : True
     shortcut : se
     categories : science
     about:
@@ -933,7 +971,7 @@ engines:
       official_api_documentation: https://api.semanticscholar.org/
       use_official_api: false
       require_api_key: false
-      results: HTML
+      results: JSON
 
 # Spotify needs API credentials
 #  - name : spotify
@@ -952,6 +990,15 @@ engines:
 #    default_fields : '' # default field to query
 #    query_fields : '' # query fields
 #    enable_http : True
+
+# - name : springer nature
+#   engine : springer
+#   # get your API key from: https://dev.springernature.com/signup
+#   api_key : 'unset' # working API key, for test & debug: "a69685087d07eca9f13db62f65b8f601"
+#   disabled: True
+#   shortcut : springer
+#   categories : science
+#   timeout : 6.0
 
   - name : startpage
     engine : startpage
@@ -972,6 +1019,13 @@ engines:
     shortcut : solid
     timeout : 3.0
     disabled : True
+
+#  - name : sqlite
+#    engine : sqlite
+#    shortcut: sq
+#    database : mydb
+#    query_str : 'SELECT * FROM mytable WHERE fieldname=:query'
+#    disabled : True
 
   - name : torrentz
     engine : torrentz
@@ -1165,6 +1219,16 @@ engines:
     # See : http://mymemory.translated.net/doc/usagelimits.php
     # api_key : ''
 
+# Required dependency: mysql-connector-python
+#  - name : mysql
+#    engine : mysql_server
+#    database : mydatabase
+#    username : user
+#    password : pass
+#    limit : 10
+#    query_str : 'SELECT * from mytable WHERE fieldname=%(query)s'
+#    shortcut : mysql
+
   - name : 1337x
     engine : 1337x
     shortcut : 1337x
@@ -1257,6 +1321,7 @@ engines:
 #    engine : yacy
 #    shortcut : ya
 #    base_url : 'http://localhost:8090'
+#    enable_http: True # required if you aren't using HTTPS for your local yacy instance
 #    number_of_results : 5
 #    timeout : 3.0
 
@@ -1267,6 +1332,22 @@ engines:
     paging : True
     categories: videos
     disabled : True
+
+  - name: wordnik
+    engine: wordnik
+    shortcut: def
+    base_url: https://www.wordnik.com/
+    categories: general
+    timeout: 5.0
+    disabled: True
+
+  - name: słownik języka polskiego
+    engine: sjp
+    shortcut: sjp
+    base_url: https://sjp.pwn.pl/
+    categories: general
+    timeout: 5.0
+    disabled: True
 
 # Doku engine lets you access to any Doku wiki instance:
 # A public one or a privete/corporate one.
@@ -1397,6 +1478,11 @@ doi_resolvers :
   oadoi.org : 'https://oadoi.org/'
   doi.org : 'https://doi.org/'
   doai.io  : 'https://dissem.in/'
-  sci-hub.tw : 'https://sci-hub.tw/'
+  sci-hub.se : 'https://sci-hub.se/'
+  sci-hub.do : 'https://sci-hub.do/'
+  scihubtw.tw : 'https://scihubtw.tw/'
+  sci-hub.st : 'https://sci-hub.st/'
+  sci-hub.bar : 'https://sci-hub.bar/'
+  sci-hub.it.nf : 'https://sci-hub.it.nf/'
 
-default_doi_resolver : 'sci-hub.tw'
+default_doi_resolver : 'oadoi.org'

@@ -6,7 +6,7 @@
 from lxml.html import fromstring
 from json import loads
 from searx.utils import extract_text, match_language, eval_xpath, dict_subset
-from searx.poolrequests import get
+from searx.network import get
 
 # about
 about = {
@@ -39,7 +39,8 @@ url = 'https://html.duckduckgo.com/html'
 url_ping = 'https://duckduckgo.com/t/sl_h'
 time_range_dict = {'day': 'd',
                    'week': 'w',
-                   'month': 'm'}
+                   'month': 'm',
+                   'year': 'y'}
 
 # specific xpath variables
 result_xpath = '//div[@class="result results_links results_links_deep web-result "]'  # noqa
